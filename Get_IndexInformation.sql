@@ -20,21 +20,18 @@ DECLARE @DEBUG_indexInformation_exists  BIT =
     END
 
 
-------------------------------
+-------------------
 -- User inputs
-------------------------------
+-------------------
 SET @database_name  = N'Test'
-SET @schema_name    = N'dbo'
-SET @table_name     = N'Test'
+SET @schema_name    = NULL --N'dbo'
+SET @table_name     = NULL --N'Test'
 ------------------------------
 -- User inputs
 ------------------------------
 
--- Make sure the object information was provided
-IF (@database_name IS NULL
-    OR @schema_name IS NULL
-    OR @table_name IS NULL) BEGIN
-
+-- Make sure we have at least the database name
+IF (@database_name IS NULL) BEGIN
     PRINT 'Error: Missing database object information.'
     RETURN
 END
@@ -56,7 +53,7 @@ IF @DEBUG_indexInformation_exists = 'False'
     -- Create a temporairy table to contain our index information
     SELECT TOP 0
         IDENTITY(INT, 1, 1) AS IndexInformationId   -- Used to sort the index information in a specific way (ie: ''pretty print'' kind of way)
-        , CAST(NULL AS VARCHAR(MAX)) AS [Source]    
+        , CAST(NULL AS VARCHAR(256)) AS [Source]    
         , CAST(NULL AS SYSNAME) AS [IndexName]
         , CAST(NULL AS NVARCHAR(60)) AS [IndexType]
         , CAST(NULL AS VARCHAR(8)) AS [IndexStatus]
@@ -69,6 +66,9 @@ IF @DEBUG_indexInformation_exists = 'False'
                                             
     -- Prepare our dynamic SQL - Query needs to be ran against a specific database
     SET @sqlParam = N'
+        @database_name          SYSNAME,
+        @schema_name            SYSNAME,
+        @table_name             SYSNAME,
         @use_quotename          BIT,
         @show_primarykey        BIT,
         @show_disabled_index    BIT'
@@ -78,7 +78,20 @@ IF @DEBUG_indexInformation_exists = 'False'
     
     INSERT #indexInformation
     SELECT
-        NULL AS [Source]
+        CASE WHEN @use_quotename = ''True''
+             THEN QUOTENAME(@database_name)
+             ELSE @database_name
+        END
+        + ''.'' +
+        CASE WHEN @use_quotename = ''True''
+             THEN QUOTENAME(S.[name])
+             ELSE S.[name]
+        END
+        + ''.'' +
+        CASE WHEN @use_quotename = ''True''
+             THEN QUOTENAME(T.[name])
+             ELSE T.[name]
+        END AS [Source]
     
         , CASE @use_quotename
             WHEN ''True'' THEN QUOTENAME(I.[name])
@@ -114,7 +127,29 @@ IF @DEBUG_indexInformation_exists = 'False'
             ON C.[object_id] = I.[object_id]
             AND C.[column_id] = IC.[column_id]      
 
-    WHERE   
+    WHERE
+        -- If @schema_name was supplied
+        (CASE WHEN ISNULL(@schema_name, '''') = ''''
+             THEN 1
+             ELSE CASE WHEN @schema_name = S.[name]
+                       THEN 1
+                       ELSE 0
+                   END
+         END) = 1
+
+        AND
+
+        -- If @table_name was supplied
+        (CASE WHEN ISNULL(@table_name, '''') = ''''
+             THEN 1
+             ELSE CASE WHEN @table_name = T.[name]
+                       THEN 1
+                       ELSE 0
+                  END
+         END) = 1
+
+        AND
+
         -- Conditional display for CLUSTERED indexes
         (CASE @show_primarykey
             WHEN ''True'' THEN 1
@@ -130,44 +165,19 @@ IF @DEBUG_indexInformation_exists = 'False'
         END) = 1
                                             
     ORDER BY
-            I.is_primary_key ASC
-        , [Source] ASC  
-        --, is_disabled ASC 
+          I.is_primary_key ASC
+        , [Source] ASC 
+        , I.index_id
         , IC.is_included_column ASC
         , IC.index_column_id ASC
     ;'
 EXECUTE sp_executesql   @sql, @sqlParam,
+                        @database_name          = @database_name,
+                        @schema_name            = @schema_name,
+                        @table_name             = @table_name,
                         @use_quotename          = @use_quotename,
                         @show_primarykey        = @show_primarykey,
                         @show_disabled_index    = @show_disabled_index
-
--- Generate the column [Source]
-UPDATE II
-SET 
-    [Source] = S.[Source]
-FROM 
-    #indexInformation AS II
-    INNER JOIN (
-            SELECT
-                index_id,
-                CASE WHEN @use_quotename = 'True'
-                     THEN QUOTENAME(@database_name)
-                     ELSE @database_name
-                END
-                + '.' +
-                CASE WHEN @use_quotename = 'True' 
-                     THEN QUOTENAME(@schema_name)
-                     ELSE @schema_name
-                END
-                + '.' + 
-                CASE WHEN @use_quotename = 'True'
-                     THEN QUOTENAME(@table_name)
-                     ELSE @table_name
-                END AS [Source]
-            FROM
-                #indexInformation
-            ) AS S /*Source*/
-                ON S.index_id = II.index_id
 ------------------------------------------
 -- Generate #indexInformation   
 ------------------------------------------
@@ -189,6 +199,7 @@ ORDER BY
 -------------------------------------------------------
 SELECT DISTINCT
     II.[Source],
+    II.IndexName,
     II.IndexStatus,
     'CREATE ' + [IndexType] +
     ' INDEX ' + [IndexName] COLLATE DATABASE_DEFAULT + @new_line + 
@@ -233,7 +244,8 @@ FROM
                ) AS ICL
                     ON ICL.index_id = II.index_id
 ORDER BY
-     IndexCreationScript DESC
+     IndexName ASC
+    ,IndexCreationScript DESC
 -------------------------------------------------------
 -- Generate the index creation script
 -------------------------------------------------------
