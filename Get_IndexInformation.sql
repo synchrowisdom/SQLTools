@@ -201,13 +201,13 @@ SELECT DISTINCT
     II.[Source],
     II.IndexName,
     II.IndexStatus,
-    'CREATE ' + [IndexType] +
-    ' INDEX ' + [IndexName] COLLATE DATABASE_DEFAULT + @new_line + 
-    ' ON ' + [Source] +
+    'CREATE ' + II.[IndexType] +
+    ' INDEX ' + II.[IndexName] COLLATE DATABASE_DEFAULT + @new_line + 
+    ' ON ' + II.[Source] +
     ' (' + CL.[column_list] + ')' + 
     
     -- Included columns if needed
-    CASE WHEN ICL.[included_column_list] IS NOT NULL
+    CASE WHEN LEN(ICL.[included_column_list]) > 0
         THEN @new_line + ' INCLUDE (' + ICL.[included_column_list] + ');'
         ELSE ';'
     END AS IndexCreationScript
@@ -215,37 +215,43 @@ SELECT DISTINCT
 FROM 
     #indexInformation AS II
     INNER JOIN (SELECT 
-                    index_id
+                    I.[Source]
+                   ,I.[IndexName]
                    ,STUFF((
-                        SELECT ', ' + CAST(IndexColumn AS VARCHAR(MAX))
+                        SELECT ', ' + CAST(IndexColumn AS NVARCHAR(128))
                         FROM #indexInformation AS I2
-                        WHERE I2.index_id = I.index_id
-                          AND is_included_column = 'False'
+                        WHERE I2.[Source] = I.[Source]
+                          AND I2.[IndexName] = I.[IndexName]
+                          AND I2.is_included_column = 'False'
                         ORDER BY index_column_id ASC
                         FOR XML PATH('')
                         ), 1, 2, '') AS column_list
                 FROM
                     #indexInformation AS I
                 ) AS CL
-                    ON CL.index_id = II.index_id
+                    ON CL.[Source] = II.[Source]
+                   AND CL.[IndexName] = II.[IndexName]
     
     LEFT OUTER JOIN (SELECT 
-                        index_id
+                        I.[Source]
+                       ,I.[IndexName]
                        ,STUFF((
-                            SELECT ', ' + CAST(IndexColumn AS VARCHAR(MAX))
+                            SELECT ', ' + CAST(IndexColumn AS NVARCHAR(128))
                             FROM #indexInformation AS I2
-                            WHERE I2.index_id = I.index_id
-                              AND is_included_column = 'True'
+                            WHERE I2.[Source] = I.[Source]
+                              AND I2.[IndexName] = I.[IndexName]
+                              AND I2.is_included_column = 'True'
                             ORDER BY index_column_id ASC
                             FOR XML PATH('')
                             ), 1, 2, '') AS included_column_list
                     FROM
                         #indexInformation AS I
-               ) AS ICL
-                    ON ICL.index_id = II.index_id
-ORDER BY
-     IndexName ASC
-    ,IndexCreationScript DESC
+                    ) AS ICL
+                        ON ICL.[Source] = II.[Source]
+                       AND ICL.[IndexName] = II.[IndexName]
+ORDER BY     
+    IndexCreationScript DESC
+   ,IndexName ASC
 -------------------------------------------------------
 -- Generate the index creation script
 -------------------------------------------------------
